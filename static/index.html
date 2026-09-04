@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A local dashboard for SSD endurance, SMART health, and temperature."
+    />
+    <title>SSD Life Monitor</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">LOCAL STORAGE TELEMETRY</p>
+          <h1>SSD Life Monitor</h1>
+          <p class="lede">
+            Read-only visibility into rated endurance, SMART health, and drive temperature.
+          </p>
+        </div>
+        <div class="header-actions">
+          <a class="text-link" href="/docs" target="_blank" rel="noreferrer">API docs</a>
+          <button id="refresh" class="button" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section id="status" class="status" aria-live="polite"></section>
+      <section id="drives" class="drive-grid" aria-live="polite">
+        <div class="loading-card">Reading the host storage inventory…</div>
+      </section>
+
+      <footer class="footer">
+        <p>
+          Endurance remaining is the drive-reported estimate of rated flash endurance. It is not a
+          guaranteed lifespan or a measure of free disk space.
+        </p>
+        <p id="updated">Waiting for the first reading.</p>
+      </footer>
+    </main>
+    <noscript>This dashboard needs JavaScript enabled to display drive readings.</noscript>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  ssd-life-monitor:
+    build: .
+    container_name: ssd-life-monitor
+    restart: unless-stopped
+    # Required by smartctl/nvme-cli on most hosts. Narrow this to explicit
+    # devices and capabilities after validating the host-specific setup.
+    privileged: true
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ssd-life-data:/data
+
+volumes:
+  ssd-life-data:
+    name: ssd-life-data
