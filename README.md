@@ -1,178 +1,185 @@
 # SSD Life Monitor
 
-SSD Life Monitor is a small, local-first Linux web app that reports what the
-storage device itself knows about its condition:
+SSD Life Monitor is a small, local-first Linux dashboard for the health signals
+reported by storage devices. Its main view is SSD rated-endurance remaining,
+alongside SMART status, temperature, warning indicators, and a cautious
+history-based lifetime projection.
 
-- NVMe rated endurance consumed and remaining
-- SMART health status
-- Current temperature
-- NVMe controller warning and critical temperature thresholds
-- A cautious, history-based endurance projection after enough samples exist
-- Drive model, serial number, transport, size, and device path
+It is read-only: it does not mount, format, benchmark, trim, or write to a
+drive.
 
-It is intentionally read-only. It does not mount, format, write to, benchmark,
-trim, or otherwise modify a drive.
+## What it reports
 
-## What “life remaining” means
+- NVMe rated endurance used and remaining
+- SMART pass/fail status and all documented smartctl exit-status warnings
+- Current temperature and NVMe warning/critical temperature thresholds
+- NVMe critical warnings, available spare, media errors, unsafe shutdowns,
+  power-on hours, and data written
+- Conservative SATA remaining-life attributes when a drive exposes an
+  explicitly labelled value
+- USB-attached SSDs that `smartctl --scan-open` can identify
+- A 90-day chart and a quantization-aware endurance projection
+- Explicit stale-data, collector, and database health state
 
-For NVMe, the app reads the standardized SMART health-log field
-`percentage_used`. This is the manufacturer/controller estimate of the portion
-of the drive’s *rated endurance* that has been consumed. The app displays:
+## The important meaning of “SSD life”
+
+For NVMe, the app reads the standardized `percentage_used` health-log field.
+That value estimates the percentage of the drive's *rated flash endurance*
+that has been consumed:
 
 ```text
-endurance remaining = max(0, 100 - percentage_used)
+rated endurance remaining = max(0, 100 - percentage_used)
 ```
 
-This is not free capacity, a guaranteed failure date, or a prediction of how
-many years the SSD will operate. `percentage_used` may exceed 100 when a drive
-has exceeded its rated endurance; the displayed remaining value is then zero.
+This is not free disk space, battery-style physical health, or a guaranteed
+failure date. An SSD can fail before reaching 100%, and many drives continue
+working after exceeding their rated endurance. The raw used value can exceed
+100%; the remaining display stops at zero.
 
-The optional time projection is calculated locally from stored readings. It is
-shown only after at least two readings with increasing wear and one hour of
-history. It is a rough projection at the observed wear rate, not a warranty or
-failure prediction.
+For SATA, SMART attribute meanings are vendor-specific. The app accepts only a
+small exact allowlist of attributes explicitly describing remaining life. It
+does not reinterpret generic wear-level counters.
 
-## Quick start with Docker
+## Quick start
 
-Docker is the recommended installation because the image includes the Linux
-utilities required by the collector.
+Requirements: Linux, Docker Engine, and Docker Compose v2.
 
 ```sh
 git clone https://github.com/Mr-Sunglasses/ssd-life-monitor.git
 cd ssd-life-monitor
-docker compose up --build
+docker compose up --build -d
+docker compose ps
 ```
 
 Open <http://127.0.0.1:8787>.
 
-The Compose file uses `privileged: true` because SMART and NVMe controller
-queries commonly require raw access to host block devices. This is a powerful
-permission. Keep the dashboard bound to localhost unless you add authentication
-and a trusted network boundary. See [docs/operations.md](docs/operations.md)
-for safer device/capability configurations and troubleshooting.
+The deployment intentionally has two containers:
 
-To stop it:
+```text
+browser -> unprivileged web container -> Unix socket -> privileged collector
+                                                     -> SMART/NVMe tools
+                                                     -> SQLite history
+```
+
+Only `collector` has host-device privileges. It has no network interface and
+does not publish a port. Its socket is restricted to group 10001. `web` runs as
+UID/GID 10001 with no Linux capabilities and a read-only root filesystem. The
+HTTP port is bound to localhost by default.
+
+The broad `privileged: true` collector setting is the compatibility default
+because access requirements differ across NVMe, SATA, USB bridges, kernels, and
+container runtimes. Narrow it to explicit devices and capabilities after
+testing on the target host. See [the operations guide](docs/operations.md).
+
+To stop the app without deleting history:
 
 ```sh
 docker compose down
 ```
 
-The SQLite history lives in the named `ssd-life-data` volume. Removing that
-volume also removes the history:
+## Lifetime projection
+
+The projection is deliberately harder to obtain than a simple two-point trend.
+It is shown only when all of these conditions hold:
+
+- the source is the standardized NVMe percentage-used counter;
+- the drive has a stable serial number or WWN;
+- at least 14 days of usable history exist;
+- wear increased by at least two percentage points; and
+- at least three distinct counter values were observed.
+
+Because the counter commonly advances in coarse 1% steps, the app displays a
+range and a low/medium/high confidence label. A counter decrease starts a new
+trend segment instead of combining data across a reset or drive replacement.
+The result is still a rated-endurance extrapolation—not a predicted failure
+date or warranty statement.
+
+## Reliability behavior
+
+- Collection runs every 60 seconds even when no browser is open.
+- Multiple drives are queried concurrently, and one failed controller does not
+  hide other drives.
+- The last successful snapshot is stored in SQLite and survives restarts.
+- A failed refresh returns that snapshot with `stale: true`, its age, the error,
+  and the consecutive-failure count.
+- Browser request and history failures preserve the last rendered reading.
+- Manual refreshes are rate-limited to protect the host from repeated hardware
+  commands.
+- SQLite uses WAL mode, a busy timeout, bounded values, daily retention cleanup,
+  and health checks.
+
+## Supported storage
+
+| Device path | Support | Notes |
+| --- | --- | --- |
+| Native NVMe SSD | Best | Standard endurance, health metrics, and controller temperature thresholds |
+| Native SATA SSD | Partial | SMART and temperature; endurance only for exact recognized attributes |
+| USB SATA/NVMe SSD | Bridge-dependent | Automatically uses the type reported by `smartctl --scan-open` |
+| HDD | Health only | May be listed, but SSD endurance is unavailable |
+| RAID/virtual disk | Controller-dependent | The abstraction may hide physical SMART data |
+
+## API and health checks
+
+Interactive API documentation is available at <http://127.0.0.1:8787/docs>.
 
 ```sh
-docker compose down --volumes
+curl -fsS http://127.0.0.1:8787/api/health | jq
+curl -fsS http://127.0.0.1:8787/api/ready | jq
+curl -fsS http://127.0.0.1:8787/api/drives | jq
+curl -fsS http://127.0.0.1:8787/api/drives/DRIVE_ID/history?hours=720 | jq
 ```
 
-## Run directly on Linux
+`/api/health` always reports the web process and returns degraded details when
+the collector cannot be reached. `/api/ready` returns HTTP 503 until the
+collector, database, tools, background task, and first fresh snapshot are ready.
+See [the API reference](docs/api.md) for field-level details.
 
-Install [`uv`](https://docs.astral.sh/uv/), Python 3.12+, `smartmontools`,
-`nvme-cli`, and `util-linux` using the host distribution’s package manager.
-Then:
+## Development with uv
+
+Python dependencies are managed only with
+[`uv`](https://docs.astral.sh/uv/). The lockfile is committed and all automated
+commands use `--locked`.
 
 ```sh
 uv sync --locked
-sudo -E env DATABASE_PATH="$PWD/ssd-life.sqlite3" "$PWD/.venv/bin/uvicorn" app.main:app --host 127.0.0.1 --port 8787
-```
-
-`uv.lock` is committed. The `--locked` flag makes setup fail instead of
-silently changing the resolved dependency set.
-
-The process needs permission to query the drives. Running the whole web server
-as root is convenient for a private machine but is not ideal; a dedicated
-collector service with a small authenticated API is safer for a shared host.
-
-## API
-
-FastAPI publishes interactive documentation at `/docs` and an OpenAPI schema
-at `/openapi.json`.
-
-### `GET /api/health`
-
-Returns application status and whether `lsblk`, `smartctl`, and `nvme` are
-present in the runtime environment.
-
-### `GET /api/drives`
-
-Discovers `disk` devices reported by `lsblk` with `nvme` or `sata` transport,
-then collects health data. The result contains a normalized record for each
-device. A short server-side cache avoids running hardware queries repeatedly
-when several browsers are open. Use `?force=true` for a fresh reading.
-
-Important fields include:
-
-| Field | Meaning |
-| --- | --- |
-| `smart_status` | `healthy`, `unhealthy`, or `unknown` from SMART JSON |
-| `temperature_c` | Current temperature reported by `smartctl` |
-| `endurance_used_percent` | Standardized NVMe usage or a clearly-labelled SATA attribute |
-| `endurance_remaining_percent` | The normalized remaining endurance value |
-| `endurance_source` | How the endurance value was obtained |
-| `projection` | Conservative history-based projection, if available |
-
-### `GET /api/drives/{id}/history?hours=720`
-
-Returns the stored one-minute endurance/temperature samples for a drive. The
-server accepts only the generated hexadecimal drive identifier, never an
-arbitrary path or command.
-
-## Supported devices and limitations
-
-### NVMe SSDs
-
-NVMe is the strongest-supported path. The collector uses:
-
-```sh
-smartctl -a /dev/nvme0n1 --json
-nvme id-ctrl /dev/nvme0n1 --output-format=json
-```
-
-It reads `percentage_used`, `temperature.current`, `wctemp`, and `cctemp`.
-
-### SATA SSDs
-
-SMART health and temperature are generally available. SSD endurance is not a
-universal ATA field, so the app accepts only clearly-labelled attributes such
-as `Media_Wearout_Indicator`, `SSD_Life_Left`, or percentage-lifetime-remaining
-attributes. It deliberately does not reinterpret generic
-`Wear_Leveling_Count` values, because vendor meanings differ. Unsupported
-SATA models show endurance as unavailable rather than inventing a percentage.
-
-### USB enclosures and virtual disks
-
-Some USB-to-SATA/NVMe bridges do not pass SMART commands through. Depending on
-the enclosure, a host may need an explicit smartctl device type such as
-`smartctl -d sat`; this project does not guess device types automatically.
-Virtual disks and RAID controller abstractions may also hide the physical SSD
-health log.
-
-## Development
-
-```sh
-make install
 make lint
 make test
-make run
 ```
 
-Use `uv add <package>` or `uv add --dev <package>` to change dependencies, then
-commit the resulting `pyproject.toml` and `uv.lock` changes together. `pip` and
-hand-maintained requirements files are intentionally not part of this workflow.
+Use `uv add <package>` or `uv add --dev <package>` to change dependencies. Do
+not add a `requirements.txt` or use direct `pip install` commands for this
+project.
 
-The tests use fake command output and do not require a physical SSD. The
-collector is dependency-injected so SMART parsing, failure handling, and
-history calculations can be tested without invoking host commands.
+To run directly on Linux, first install `smartmontools`, `nvme-cli`, and
+`util-linux`. Start the collector and web process in separate terminals:
 
-See [docs/architecture.md](docs/architecture.md) for the data flow and design
-decisions, and [docs/operations.md](docs/operations.md) for deployment,
-permissions, backups, and troubleshooting.
+```sh
+mkdir -p .run
+sudo -g "$(id -gn)" env \
+  DATABASE_PATH="$PWD/ssd-life.sqlite3" \
+  COLLECTOR_SOCKET="$PWD/.run/collector.sock" \
+  "$PWD/.venv/bin/python" -m app.run_collector
+```
 
-## Safety and privacy
+```sh
+env COLLECTOR_SOCKET="$PWD/.run/collector.sock" \
+  uv run --locked uvicorn app.main:app --host 127.0.0.1 --port 8787
+```
 
-The app does not upload telemetry. Model, serial, device path, temperatures,
-and history stay on the host unless somebody can reach the HTTP server. Do not
-expose it directly to the internet. Add authentication, TLS, and a narrow
-network policy before making it reachable beyond a trusted local machine.
+The test suite uses sanitized realistic JSON fixtures and injected command
+runners, so unit tests never query physical disks. The container smoke test
+boots both production targets with deterministic fake tools:
 
-The application has no license file yet. Add the license that matches the
-intended distribution before publishing it as a reusable open-source project.
+```sh
+./scripts/container-smoke.sh
+```
+
+## Documentation
+
+- [Architecture and data semantics](docs/architecture.md)
+- [Operations, hardening, backup, and troubleshooting](docs/operations.md)
+- [HTTP API reference](docs/api.md)
+- [Security policy](SECURITY.md)
+
+The project currently has no license file. Add the intended license before
+redistributing it as an open-source package.
