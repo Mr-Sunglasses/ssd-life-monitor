@@ -1,9 +1,9 @@
 .git
 .github
 .pytest_cache
+.venv
 __pycache__
 *.pyc
 tests
 docs
 README.md
-requirements-dev.txt

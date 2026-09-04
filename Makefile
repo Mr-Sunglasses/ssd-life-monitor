@@ -1,13 +1,20 @@
-.PHONY: install test run docker-up docker-down
+.PHONY: install lock test lint run docker-up docker-down
 
 install:
-	python3 -m pip install -r requirements-dev.txt
+	uv sync --locked
+
+lock:
+	uv lock
 
 test:
-	python3 -m pytest
+	uv run --locked python -m pytest
+
+lint:
+	uv run --locked ruff check .
+	uv run --locked ruff format --check .
 
 run:
-	python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8787
+	uv run --locked uvicorn app.main:app --host 127.0.0.1 --port 8787
 
 docker-up:
 	docker compose up --build
