@@ -1,95 +1,148 @@
-# Architecture
+# Architecture and data semantics
 
-## Design goal
+## Security boundary
 
-SSD Life Monitor answers three separate questions without confusing them:
-
-1. Is the drive’s SMART health status passing?
-2. How much of the SSD’s rated flash endurance does its controller say has been used?
-3. What temperature is the drive reporting right now?
-
-Free capacity is intentionally not part of the health calculation. A nearly
-full but healthy SSD and an empty but worn SSD are different situations.
-
-## Data flow
+SSD health collection and HTTP serving have different privilege needs, so they
+run as separate processes and separate Docker targets.
 
 ```text
-lsblk --json
-    │
-    ├── identify disk, transport, model, serial, size, rotational flag
-    │
-    ├── smartctl -a <device> --json
-    │       ├── SMART pass/fail
-    │       ├── current temperature
-    │       └── NVMe percentage_used or conservative SATA attribute mapping
-    │
-    └── nvme id-ctrl <device> --output-format=json   (NVMe only)
-            ├── wctemp
-            └── cctemp
-             │
-             ▼
-       normalized drive record
-             │
-       one-minute SQLite observation
-             │
-             ▼
-       FastAPI JSON endpoints ── vanilla HTML/CSS/JS dashboard
+┌─────────┐       TCP 127.0.0.1:8787       ┌────────────────────────────┐
+│ Browser │ ──────────────────────────────> │ web                        │
+└─────────┘                                 │ UID 10001, no capabilities │
+                                            │ read-only root filesystem  │
+                                            └─────────────┬──────────────┘
+                                                          │ HTTP over UDS
+                                                          │ collector.sock
+                                            ┌─────────────▼──────────────┐
+                                            │ collector                  │
+                                            │ device privileges          │
+                                            │ network_mode: none          │
+                                            ├─────────────┬──────────────┤
+                                            │ lsblk / smartctl / nvme    │
+                                            │ SQLite WAL history         │
+                                            └─────────────┴──────────────┘
 ```
 
-The collector uses argument vectors with `subprocess.run(..., shell=False)`.
-The browser cannot submit a device path or command. Device names originate in
-`lsblk` and are validated before becoming `/dev/<name>` paths.
+The collector's FastAPI documentation and OpenAPI routes are disabled. Its
+0660 Unix socket is owned by the shared numeric group 10001 and mounted
+read-only in the web container. The web service validates drive IDs and proxies
+a fixed set of read-only routes; users cannot supply a device path or command.
+
+## Collection sequence
+
+One background cycle performs these steps:
+
+1. Run `lsblk --nodeps --json --bytes` for the block-device inventory.
+2. Run `smartctl --scan-open --json` for protocol and USB bridge types.
+3. Merge entries by validated `/dev/...` path.
+4. Query each drive concurrently with `smartctl -a --device TYPE PATH --json`.
+5. For native NVMe devices, query `nvme id-ctrl PATH --output-format=json` for
+   warning and critical temperature thresholds.
+6. Normalize finite, bounded fields and decode all eight documented smartctl
+   status bits.
+7. Record one observation per drive per minute, calculate eligible projections,
+   and atomically replace the durable latest snapshot.
+
+Commands are passed as argument vectors to `subprocess.run` with `shell=False`
+and a 12-second timeout. Device names and smartctl types are allowlist-validated
+before use.
+
+## Drive identity
+
+Historical trends must not silently join different hardware. IDs therefore
+prefer identifiers in this order:
+
+1. world-wide name (WWN);
+2. serial number; or
+3. transport, current device path, model, and size as a last-resort fallback.
+
+The fallback is marked `path-fallback`. Its history can still be displayed, but
+the app refuses to calculate a lifetime projection because Linux device names
+can change after reboot or reconnection. Identity is enriched from smartctl
+when `lsblk` omits a serial or WWN.
 
 ## Endurance semantics
 
-For NVMe, `percentage_used` is the controller’s estimate of rated endurance
-consumed. It is not a direct measurement of remaining physical flash and it is
-not a calendar prediction. The normalized calculation is:
+### NVMe
+
+NVMe `percentage_used` is a controller estimate of rated endurance consumed.
+The API retains valid values from 0 through 255 and normalizes the displayed
+remaining value to the 0–100 range:
 
 ```text
-used = percentage_used
-remaining = max(0, 100 - used)
+remaining = clamp(100 - percentage_used, 0, 100)
 ```
 
-The raw used value is retained so values above 100 remain visible to API
-consumers. The UI clamps the ring to zero at that point.
+The collector also exposes critical-warning bits, available spare and its
+threshold, media errors, error-log entries, unsafe shutdowns, power-on hours,
+and data units written. Any non-zero NVMe critical-warning mask marks normalized
+SMART state as unhealthy even if a generic pass field says otherwise.
 
-ATA SMART attributes do not have one universal endurance field. The parser only
-uses attribute names that explicitly describe a remaining-life percentage. A
-generic wear counter is returned as unavailable instead of being presented as
-a misleading percentage.
+### SATA
 
-## Time projection
+ATA SMART attribute IDs and normalized values are vendor-specific. The parser
+uses an exact normalized-name allowlist for fields such as `SSD_Life_Left` and
+`Media_Wearout_Indicator`. Substring matches and generic
+`Wear_Leveling_Count` values are rejected. SATA endurance is useful as a
+vendor-reported display value but is not used for time projection.
 
-The history store keeps one sample per drive per minute and retains 90 days.
-The projection uses the oldest and newest usable sample in the requested
-history window:
+## Projection model
+
+The projection operates on the standardized NVMe integer percentage counter.
+It requires a stable identity, at least 14 days, at least 2% wear, and at least
+three distinct counter values. If the counter decreases, only observations
+after the latest decrease are considered.
+
+For the usable segment:
 
 ```text
-daily wear rate = (latest used - oldest used) / elapsed days
-days remaining = (100 - latest used) / daily wear rate
+rate = wear_delta / elapsed_days
+central_days = remaining / rate
+fast_rate = (wear_delta + 1) / elapsed_days
+slow_rate = (wear_delta - 1) / elapsed_days
+range = remaining / fast_rate ... remaining / slow_rate
 ```
 
-It remains unavailable when there are fewer than two samples, less than one
-hour of history, or no increase in the wear counter. A drive replacement or
-counter reset should also invalidate the trend; this first version chooses
-conservative non-estimation over silently joining unrelated histories.
+The ±1 term reflects the counter's coarse quantization. Confidence labels are
+deterministic:
 
-## Caching and refresh
+| Confidence | Minimum evidence |
+| --- | --- |
+| Low | Projection eligibility only |
+| Medium | 30 days and 3% observed wear |
+| High | 60 days, 5% observed wear, and 30 observations |
 
-`MonitorService` serializes snapshots with a lock and caches them for 15
-seconds by default. This protects a host from several browser tabs issuing
-simultaneous SMART queries. `?force=true` bypasses that cache. The frontend
-refreshes every 15 seconds and separately loads the last 30 days of chart data.
+This extrapolates when the drive could consume its rated endurance if the
+observed workload continues. It does not model random hardware failure,
+retention loss, workload changes, write amplification, or manufacturer-specific
+behavior.
+
+## Persistence and concurrency
+
+SQLite stores one-minute observations for 90 days and one latest-successful
+snapshot. Connections use WAL mode, `synchronous=NORMAL`, a five-second busy
+timeout, value constraints, and a ten-second connection timeout. Retention is
+pruned at most once per day.
+
+The monitor has separate state and refresh locks. Only one hardware cycle can
+run at a time; concurrent requests receive the current snapshot. Manual forced
+refreshes have their own minimum interval. Per-drive commands run in a bounded
+thread pool, and an unexpected failure is converted into an unavailable record
+for that drive instead of aborting the inventory.
 
 ## Failure behavior
 
-- A failed `lsblk` inventory returns HTTP 503 because the app cannot know which
-  devices exist.
-- A failed per-drive SMART command leaves that drive visible with `unknown`
-  health and a collector error.
-- SMART non-zero exit codes do not automatically mean command failure. SMART
-  tools use bit flags for health conditions, so valid JSON is parsed even when
-  the process exits non-zero.
-- Missing fields are represented as unavailable. The app does not substitute
-  generic temperatures or life percentages.
+| Failure | Result |
+| --- | --- |
+| Inventory command fails before any success | Drives endpoint returns HTTP 503 |
+| Inventory fails after a success | Last snapshot is returned with `stale: true` |
+| One drive command fails | Other drives remain available; failed drive has `collector_errors` |
+| smartctl health bits are non-zero | Valid JSON is kept and health warnings are decoded |
+| Database is unavailable or corrupt | Readiness fails with database details |
+| Collector task stops | Readiness fails |
+| Collector socket is unavailable | Web health remains reachable but reports degraded |
+| Browser refresh/history request fails | Previously rendered data remains visible |
+
+The snapshot carries its age, last attempt/success timestamps, last collector
+error, and consecutive failure count. That makes stale data visible rather than
+silently presenting it as current.

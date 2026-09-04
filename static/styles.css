@@ -113,6 +113,10 @@ h1 {
   color: var(--red);
 }
 
+.status.warning {
+  color: var(--amber);
+}
+
 .drive-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
@@ -310,6 +314,36 @@ h1 {
   color: var(--red);
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.detail {
+  min-width: 0;
+}
+
+.detail span,
+.detail strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail span {
+  color: var(--dim);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.detail strong {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
 .chart-wrap {
   margin-top: 20px;
 }
@@ -390,6 +424,10 @@ h1 {
 
   .drive-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .footer p:last-child {
