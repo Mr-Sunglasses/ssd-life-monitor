@@ -66,15 +66,17 @@ docker compose down --volumes
 
 ## Run directly on Linux
 
-Install Python 3.12+, `smartmontools`, `nvme-cli`, and `util-linux` using the
-host distribution’s package manager. Then:
+Install [`uv`](https://docs.astral.sh/uv/), Python 3.12+, `smartmontools`,
+`nvme-cli`, and `util-linux` using the host distribution’s package manager.
+Then:
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements-dev.txt
-sudo -E env DATABASE_PATH="$PWD/ssd-life.sqlite3" "$PWD/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port 8787
+uv sync --locked
+sudo -E env DATABASE_PATH="$PWD/ssd-life.sqlite3" "$PWD/.venv/bin/uvicorn" app.main:app --host 127.0.0.1 --port 8787
 ```
+
+`uv.lock` is committed. The `--locked` flag makes setup fail instead of
+silently changing the resolved dependency set.
 
 The process needs permission to query the drives. Running the whole web server
 as root is convenient for a private machine but is not ideal; a dedicated
@@ -147,12 +149,15 @@ health log.
 ## Development
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
 make install
+make lint
 make test
 make run
 ```
+
+Use `uv add <package>` or `uv add --dev <package>` to change dependencies, then
+commit the resulting `pyproject.toml` and `uv.lock` changes together. `pip` and
+hand-maintained requirements files are intentionally not part of this workflow.
 
 The tests use fake command output and do not require a physical SSD. The
 collector is dependency-injected so SMART parsing, failure handling, and
