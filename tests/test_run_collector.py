@@ -1,10 +1,25 @@
 import socket
+import stat
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from app.run_collector import remove_stale_socket
+from app.run_collector import create_listener, remove_stale_socket
+
+
+def test_create_listener_preserves_group_only_socket_access():
+    with tempfile.TemporaryDirectory(prefix="slm-", dir="/tmp") as directory:
+        path = Path(directory) / "collector.sock"
+
+        listener = create_listener(path)
+        try:
+            mode = path.lstat().st_mode
+            assert stat.S_ISSOCK(mode)
+            assert stat.S_IMODE(mode) == 0o660
+        finally:
+            listener.close()
+            path.unlink()
 
 
 def test_remove_stale_socket_removes_only_a_unix_socket():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import stat
 from pathlib import Path
 
@@ -21,6 +22,20 @@ def remove_stale_socket(socket_path: Path) -> None:
     socket_path.unlink()
 
 
+def create_listener(socket_path: Path) -> socket.socket:
+    """Bind a Unix listener without letting the ASGI server widen its mode."""
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(socket_path))
+        socket_path.chmod(0o660)
+    except BaseException:
+        listener.close()
+        remove_stale_socket(socket_path)
+        raise
+    return listener
+
+
 def main() -> None:
     socket_path = Path(os.getenv("COLLECTOR_SOCKET", "/run/ssd-life/collector.sock"))
     if not socket_path.is_absolute():
@@ -29,18 +44,18 @@ def main() -> None:
     socket_path.parent.chmod(0o755)
     remove_stale_socket(socket_path)
 
-    # Uvicorn creates the socket as root:ssd-life in the container. 0660 lets
-    # the unprivileged web process connect without making the internal API
-    # available to unrelated users that can traverse the runtime directory.
-    previous_umask = os.umask(0o117)
+    # Binding the socket ourselves is intentional: Uvicorn's UDS path forces
+    # mode 0666 after bind. Passing the descriptor preserves 0660 so only root
+    # and the shared ssd-life group can reach the privileged internal API.
+    listener = create_listener(socket_path)
     try:
         uvicorn.run(
             "app.collector_api:app",
-            uds=str(socket_path),
+            fd=listener.fileno(),
             access_log=False,
         )
     finally:
-        os.umask(previous_umask)
+        listener.close()
         try:
             mode = socket_path.lstat().st_mode
         except FileNotFoundError:
