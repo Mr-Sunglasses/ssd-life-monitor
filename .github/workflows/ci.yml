@@ -21,3 +21,4 @@ jobs:
       - run: ruff check .
       - run: python -m pytest
       - run: python -m compileall -q app
+      - run: docker build --tag ssd-life-monitor:ci .
