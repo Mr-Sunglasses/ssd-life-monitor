@@ -1,0 +1,36 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 4],
+    "exit_status": 0
+  },
+  "model_name": "Example SATA SSD",
+  "serial_number": "SATA-SERIAL-001",
+  "wwn": {
+    "naa": 5,
+    "oui": 11259375,
+    "id": 123456789
+  },
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 36
+  },
+  "ata_smart_attributes": {
+    "table": [
+      {
+        "id": 177,
+        "name": "Wear_Leveling_Count",
+        "value": 98,
+        "raw": {"value": 12}
+      },
+      {
+        "id": 233,
+        "name": "Media_Wearout_Indicator",
+        "value": 87,
+        "raw": {"value": 13}
+      }
+    ]
+  }
+}

@@ -21,6 +21,10 @@ jobs:
       - run: uv sync --locked
       - run: uv run --locked ruff check .
       - run: uv run --locked ruff format --check .
+      - run: uv run --locked mypy app
       - run: uv run --locked python -m pytest
       - run: uv run --locked python -m compileall -q app
-      - run: docker build --tag ssd-life-monitor:ci .
+      - run: node --check static/app.js
+      - run: shellcheck scripts/container-smoke.sh tests/fake-bin/*
+      - run: docker compose config --quiet
+      - run: ./scripts/container-smoke.sh

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+if [ -e /state/fail ]; then
+  echo "simulated inventory failure" >&2
+  exit 1
+fi
+
+printf '%s\n' '{"blockdevices":[{"name":"nvme0n1","model":"Fixture NVMe 2TB","serial":"FIXTURE-001","wwn":"eui.fixture001","size":2000000000000,"type":"disk","tran":"nvme","rota":false}]}'

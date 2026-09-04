@@ -4,5 +4,6 @@ __pycache__/
 .venv/
 .mypy_cache/
 .ruff_cache/
+.run/
 *.sqlite3
 .DS_Store

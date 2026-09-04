@@ -1,16 +1,74 @@
 services:
-  ssd-life-monitor:
-    build: .
-    container_name: ssd-life-monitor
+  collector:
+    build:
+      context: .
+      target: collector
     restart: unless-stopped
-    # Required by smartctl/nvme-cli on most hosts. Narrow this to explicit
-    # devices and capabilities after validating the host-specific setup.
     privileged: true
+    network_mode: none
+    read_only: true
+    environment:
+      DATABASE_PATH: /data/ssd-life.sqlite3
+      COLLECTOR_SOCKET: /run/ssd-life/collector.sock
+      COLLECTION_INTERVAL_SECONDS: "60"
+      STALE_AFTER_SECONDS: "180"
+      FORCE_MIN_INTERVAL_SECONDS: "30"
+    volumes:
+      - ssd-life-data:/data
+      - ssd-life-runtime:/run/ssd-life
+    tmpfs:
+      - /tmp:noexec,nosuid,size=16m
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - >-
+          import socket;
+          s=socket.socket(socket.AF_UNIX);
+          s.settimeout(2);
+          s.connect('/run/ssd-life/collector.sock');
+          s.sendall(b'GET /internal/ready HTTP/1.0\r\nHost: collector\r\n\r\n');
+          assert b' 200 ' in s.recv(256)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    depends_on:
+      collector:
+        condition: service_healthy
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      COLLECTOR_SOCKET: /run/ssd-life/collector.sock
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
-      - ssd-life-data:/data
+      - ssd-life-runtime:/run/ssd-life:ro
+    tmpfs:
+      - /tmp:noexec,nosuid,size=16m
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8787/api/ready', timeout=2).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
   ssd-life-data:
     name: ssd-life-data
+  ssd-life-runtime:

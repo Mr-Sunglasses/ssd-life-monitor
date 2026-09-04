@@ -1,0 +1,27 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 4],
+    "exit_status": 0
+  },
+  "model_name": "Example NVMe 2TB",
+  "serial_number": "NVME-SERIAL-001",
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 42
+  },
+  "nvme_smart_health_information_log": {
+    "critical_warning": 0,
+    "temperature": 315,
+    "available_spare": 100,
+    "available_spare_threshold": 10,
+    "percentage_used": 7,
+    "data_units_written": 1234567,
+    "power_on_hours": 8760,
+    "unsafe_shutdowns": 2,
+    "media_errors": 0,
+    "num_err_log_entries": 3
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 4],
+    "exit_status": 0
+  },
+  "devices": [
+    {
+      "name": "/dev/nvme0n1",
+      "info_name": "/dev/nvme0n1",
+      "type": "nvme",
+      "protocol": "NVMe"
+    },
+    {
+      "name": "/dev/sda",
+      "info_name": "/dev/sda [SAT]",
+      "type": "sat",
+      "protocol": "ATA"
+    },
+    {
+      "name": "/dev/sdc",
+      "info_name": "/dev/sdc [USB bridge]",
+      "type": "sat",
+      "protocol": "ATA"
+    }
+  ]
+}
